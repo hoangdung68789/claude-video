@@ -33,11 +33,16 @@ SCENE_MIN_FRAMES = 8
 KEYFRAME_MIN = 4
 MAX_READ_DIMENSION = 1998
 # Frame-delta dedup: downscale each frame to a DEDUP_THUMB x DEDUP_THUMB
-# RGB thumbnail and treat two frames as near-identical when their mean
-# per-channel difference (0-255) is at or below DEDUP_THRESHOLD. This catches
-# held slides, but subtle code/text changes can be missed at this thumbnail size. Unlike a within-frame
-# perceptual hash, this distinguishes flat frames (solid slides, fades) by color.
-DEDUP_THUMB = 16
+# RGB thumbnail, split it into a DEDUP_GRID x DEDUP_GRID grid of blocks, and
+# treat two frames as near-identical when the *largest* block's mean
+# per-channel difference (0-255) is at or below DEDUP_THRESHOLD. A whole-frame
+# mean diluted a single changed line of text on a flat slide below the
+# threshold (#258); the block max keeps localized changes visible, and since it
+# is never below the whole-frame mean it can only keep more frames, never fewer.
+# Unlike a within-frame perceptual hash, this distinguishes flat frames
+# (solid slides, fades) by color.
+DEDUP_THUMB = 32
+DEDUP_GRID = 4
 DEDUP_THRESHOLD = 2.0
 SHOWINFO_TS_RE = re.compile(r"pts_time:([^\s]+)")
 
@@ -417,12 +422,20 @@ def _even_sample(candidates: list[dict], n: int) -> list[dict]:
 
 
 def _frame_delta(a: bytes, b: bytes) -> float:
-    """Mean absolute per-pixel difference (0-255) between two RGB
-    thumbnails. Mismatched lengths are treated as maximally different so a
-    decode hiccup never collapses distinct frames."""
+    """Largest per-block mean absolute difference (0-255) between two RGB
+    thumbnails; buffers that are not full thumbnails use the whole-buffer mean.
+    Mismatched lengths are treated as maximally different so a decode hiccup
+    never collapses distinct frames."""
     if not a or len(a) != len(b):
         return float("inf")
-    return sum(abs(x - y) for x, y in zip(a, b)) / len(a)
+    side, block = DEDUP_THUMB, DEDUP_THUMB // DEDUP_GRID
+    if len(a) != side * side * 3 or block < 1:
+        return sum(abs(x - y) for x, y in zip(a, b)) / len(a)
+    sums = [0] * (DEDUP_GRID * DEDUP_GRID)
+    for i, (x, y) in enumerate(zip(a, b)):
+        pixel = i // 3
+        sums[(pixel // side // block) * DEDUP_GRID + (pixel % side) // block] += abs(x - y)
+    return max(sums) / (block * block * 3)
 
 
 def _thumb_frames(paths: list[Path]) -> list[bytes]:

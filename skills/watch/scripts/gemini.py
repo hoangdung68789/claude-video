@@ -10,6 +10,7 @@ import json
 import math
 import mimetypes
 import re
+import sys
 import time
 from pathlib import Path
 from urllib.error import HTTPError, URLError
@@ -72,7 +73,9 @@ def _call(method: str, url: str, key: str, *, data=None, headers=None, timeout: 
         # The Files API answers a malformed key with 400 "API key not valid", not 401.
         category = ('auth' if exc.code in (401, 403) or 'api key' in message.lower() else 'quota' if exc.code == 429
                     else 'service' if exc.code >= 500 else 'rejected')
-        raise _fail(category, f'HTTP {exc.code}: {message}', key) from None
+        failure = _fail(category, f'HTTP {exc.code}: {message}', key)
+        failure.status, failure.detail = exc.code, message  # Lets ask() decide on a retry.
+        raise failure from None
     except (URLError, TimeoutError, OSError) as exc:
         raise _fail('network', f'{type(exc).__name__}: {getattr(exc, "reason", exc)}', key) from None
 
@@ -97,12 +100,40 @@ def _processing(clip):
     return config, label
 
 
-def ask(video: dict, question: str | None, *, model: str, key: str, clip=None, timeout: float = 600.0) -> dict:
-    processing, label = _processing(clip)
+# Bounded backoff for transient 5xx ("high demand"); the uploaded file is reused, never re-sent (#250).
+RETRY_DELAYS = (5, 15, 45)
+
+
+def _interact(video: dict, question: str | None, processing, *, model: str, key: str, timeout: float) -> bytes:
     payload = {'model': model, 'input': [{'type': 'video', **video, 'processing': processing},
                                          {'type': 'text', 'text': build_prompt(question)}]}
     _, _, body = _call('POST', INTERACTIONS, key, data=json.dumps(payload).encode('utf-8'),
                        headers={'Content-Type': 'application/json'}, timeout=timeout)
+    return body
+
+
+def ask(video: dict, question: str | None, *, model: str, key: str, clip=None, timeout: float = 600.0,
+        sleep=time.sleep) -> dict:
+    processing, label = _processing(clip)
+    retries = 0
+    while True:
+        try:
+            body = _interact(video, question, processing, model=model, key=key, timeout=timeout)
+            break
+        except SystemExit as exc:
+            status, detail = getattr(exc, 'status', None), getattr(exc, 'detail', '')
+            # Gemini's server-side agentic loop can reject its own file metadata; static mode is unaffected (#261).
+            if processing == 'agentic' and status == 400 and 'extended_metadata' in detail:
+                print('[watch] Gemini rejected agentic processing; retrying once with static processing…', file=sys.stderr)
+                processing, label = {'type': 'static'}, 'static (Gemini rejected agentic processing)'
+                continue
+            if status is not None and status >= 500 and retries < len(RETRY_DELAYS):
+                delay = RETRY_DELAYS[retries]
+                retries += 1
+                print(f'[watch] Gemini HTTP {status}; retry {retries}/{len(RETRY_DELAYS)} in {delay}s…', file=sys.stderr)
+                sleep(delay)
+                continue
+            raise
     try:
         data = json.loads(body)
         parts = [part['text'] for step in data['steps'] if step.get('type') == 'model_output'

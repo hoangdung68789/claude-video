@@ -2,6 +2,15 @@
 
 All notable changes to `/watch` are documented here.
 
+## [Unreleased]
+
+### Fixed
+- Dubbed YouTube videos no longer get another language's captions in auto mode: with several `*-orig` tracks, the one matching yt-dlp's declared language is chosen (English first when unknown), and the override never leaves the language-filtered tracks (#247, #257).
+- Gemini engine retries transient HTTP 5xx with bounded backoff (5s, 15s, 45s), reusing the uploaded file; 4xx is never retried (#250).
+- Gemini engine falls back once to static processing when the agentic loop rejects its own file metadata (`extended_metadata` HTTP 400); the Engine line names the fallback (#261).
+- Near-duplicate filter compares the largest per-block difference on a 32×32 thumbnail, so text-only slide changes survive; it never drops a frame the old whole-frame mean kept (#258).
+- Managed WhisperX install pins `torchvision==0.23.0` from the PyTorch CPU index, matching `torch==2.8.0+cpu` (#264).
+
 ## [0.3.2] — 2026-09-25
 
 ### Changed
