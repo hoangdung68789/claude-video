@@ -264,7 +264,7 @@ Use `WATCH_DETAIL` for the saved preference or `--detail` for one run. The `/wat
 
 Uniform sampling selects actual source frames across the range, reducing its rate to fit the remaining cap (at most 2 fps). Scene/keyframe selection detects candidates across the range, then samples to the cap. The last selected candidate need not be the last video frame; scene changes do not capture every event. Frame timestamps are source-relative, including focused and fractional seeks.
 
-A 16×16 **RGB** thumbnail pass removes near-duplicates using mean channel difference. Use `--no-dedup` for subtle visual changes; tiny thumbnails cannot preserve every code edit. Default images are up to 512px wide and 1998px tall; `--resolution 1024` helps with on-screen text. Image cost depends on the host/model and frame dimensions.
+A 32×32 **RGB** thumbnail pass removes near-duplicates using the largest per-block (4×4 grid) channel difference, so a changed line of text on a flat slide still counts. Use `--no-dedup` for subtle visual changes; tiny thumbnails cannot preserve every code edit. Default images are up to 512px wide and 1998px tall; `--resolution 1024` helps with on-screen text. Image cost depends on the host/model and frame dimensions.
 
 After reading a transcript, the agent can pin “look here” moments with `--timestamps`. These consume the frame budget first. A caption-only pass may not download a video; in that case the cue pass uses the URL again. An audio-only download cannot supply cue frames.
 

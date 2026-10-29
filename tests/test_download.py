@@ -155,3 +155,20 @@ def test_actual_ytdlp_exact_track_with_inherited_all(monkeypatch, tmp_path, stat
 def test_explicit_regional_language_is_not_silently_replaced():
     assert download.select_caption({'subtitles': _tracks('en-US')}, 'en-GB') is None
     assert download.select_caption({'subtitles': _tracks('en-US')}, 'en')['key'] == 'en-US'
+
+
+def test_dubbed_video_picks_declared_original_not_alphabetical_first():
+    # #247/#257: one -orig ASR track per dub; ar/bn sort before en.
+    origs = ('ar-orig', 'bn-orig', 'en-orig', 'es-orig')
+    info = {'extractor_key': 'Youtube', 'language': 'en-US', 'automatic_captions': _tracks(*origs, 'ar', 'bn', 'en', 'es')}
+    picked = download.select_caption(info)
+    assert (picked['key'], picked['language'], picked['provenance']) == ('en-orig', 'en', 'original')
+    info['language'] = 'es'
+    assert download.select_caption(info)['key'] == 'es-orig'
+    # Unknown declared language: English-first among originals, labeled unknown.
+    del info['language']
+    picked = download.select_caption(info)
+    assert (picked['key'], picked['provenance']) == ('en-orig', 'unknown')
+    # Explicit requests are unaffected.
+    info['language'] = 'en'
+    assert download.select_caption(info, 'bn')['key'] == 'bn'

@@ -99,7 +99,12 @@ def select_caption(info: dict, language: str = 'auto') -> dict | None:
     automatic = {k: v for k, v in (info.get('automatic_captions') or {}).items() if v and k != 'live_chat'}
     youtube = str(info.get('extractor_key') or info.get('extractor') or '').lower().startswith('youtube')
     originals = sorted(k for k in automatic if youtube and k.endswith('-orig'))
-    original = originals[0][:-5] if len(originals) == 1 else None
+    # Dubbed videos expose one -orig ASR track per audio language; pick the declared one, never index 0.
+    declared = str(info.get('language') or '').split('-')[0]
+    if len(originals) == 1:
+        original = originals[0][:-5]
+    else:
+        original = next((k[:-5] for k in originals if declared and k[:-5].split('-')[0] == declared), None)
     target = language if language != 'auto' else original or info.get('language')
     def matches(key):
         base = key.removesuffix('-orig')
@@ -115,8 +120,11 @@ def select_caption(info: dict, language: str = 'auto') -> dict | None:
         if keys:
             key = keys[0]
             # Auto mode must prefer original ASR to translated/dubbed metadata.
+            # Only swap to an -orig key that survived the language filter, so another dub's ASR never wins.
             if kind == 'automatic' and language == 'auto' and originals:
-                key = originals[0]
+                candidates = [k for k in keys if k in originals] or ([] if target else sorted(originals, key=english_first))
+                if candidates:
+                    key = candidates[0]
             base = key.removesuffix('-orig')
             provenance = 'original' if original and base.split('-')[0] == original.split('-')[0] else 'unknown'
             if language != 'auto' and original and base.split('-')[0] != original.split('-')[0]:

@@ -6,7 +6,7 @@ from pathlib import Path
 import frames
 
 
-# --- _frame_delta: mean absolute per-pixel difference ------------------------
+# --- _frame_delta: mean absolute per-pixel difference (per block for full thumbnails) ---
 
 def test_frame_delta_identical_is_zero():
     a = bytes([10] * 16)
@@ -171,3 +171,22 @@ def test_equal_brightness_different_colors_survive(tmp_path):
         paths.append({'index': index, 'timestamp_seconds': index, 'path': str(path), 'reason': 'test'})
     out, dropped = frames.dedupe_perceptual(paths)
     assert len(out) == 2 and dropped == 1
+
+
+def test_frame_delta_keeps_a_localized_change_on_a_flat_frame():
+    # #258: one changed text line on a flat slide was diluted below the threshold by a whole-frame mean.
+    side, block = frames.DEDUP_THUMB, frames.DEDUP_THUMB // frames.DEDUP_GRID
+    a = bytearray([255] * side * side * 3)
+    b = bytearray(a)
+    for x in range(block // 2):  # A short dark stroke inside one block.
+        i = x * 3
+        b[i:i + 3] = bytes([0, 0, 0])
+    whole_mean = sum(abs(x - y) for x, y in zip(a, b)) / len(a)
+    assert whole_mean <= frames.DEDUP_THRESHOLD < frames._frame_delta(bytes(a), bytes(b))
+
+
+def test_frame_delta_is_never_below_whole_frame_mean():
+    side = frames.DEDUP_THUMB
+    a = bytes((i * 7) % 256 for i in range(side * side * 3))
+    b = bytes((i * 13) % 256 for i in range(side * side * 3))
+    assert frames._frame_delta(a, b) >= sum(abs(x - y) for x, y in zip(a, b)) / len(a)

@@ -121,7 +121,8 @@ def test_empty_answer_is_a_failure(calls):
     (TimeoutError('timed out'), 'network'),
     (FakeResponse(b'<html>not json</html>'), 'response'),
 ])
-def test_failures_are_categorized_and_never_leak_the_key(calls, reply, category):
+def test_failures_are_categorized_and_never_leak_the_key(calls, reply, category, monkeypatch):
+    monkeypatch.setattr(gemini, 'RETRY_DELAYS', ())
     calls.replies = [reply]
     with pytest.raises(SystemExit) as caught:
         gemini.ask({'uri': 'https://youtu.be/abc'}, None, model='m', key=KEY)
@@ -216,4 +217,45 @@ def test_invalid_key_reported_as_http_400_is_still_auth(calls):
     """Observed live: the Files API answers a malformed key with 400, not 401."""
     calls.replies = [http_error(400, b'{"error":{"code":400,"message":"API key not valid. Please pass a valid API key.","status":"INVALID_ARGUMENT"}}')]
     with pytest.raises(SystemExit, match='^Gemini auth:'):
+        gemini.ask({'uri': 'https://youtu.be/abc'}, None, model='m', key=KEY)
+
+
+def test_transient_5xx_is_retried_with_backoff_then_answers(calls):
+    calls.replies = [http_error(503, b'high demand'), http_error(500, b'internal'), FakeResponse(answer('ok'))]
+    slept = []
+    result = gemini.ask({'file_uri': 'files/x'}, None, model='m', key=KEY, sleep=slept.append)
+    assert result['text'] == 'ok' and slept == [5, 15] and len(calls) == 3
+    assert all(json.loads(c.data)['input'][0]['file_uri'] == 'files/x' for c in calls)  # Same upload reused.
+
+
+def test_5xx_retries_are_bounded(calls):
+    calls.replies = [http_error(503, b'high demand') for _ in range(len(gemini.RETRY_DELAYS) + 1)]
+    slept = []
+    with pytest.raises(SystemExit, match='Gemini service'):
+        gemini.ask({'uri': 'https://youtu.be/abc'}, None, model='m', key=KEY, sleep=slept.append)
+    assert slept == list(gemini.RETRY_DELAYS) and not calls.replies
+
+
+def test_4xx_is_never_retried(calls):
+    calls.replies = [http_error(429, b'{"error":{"message":"Quota exceeded"}}')]
+    with pytest.raises(SystemExit, match='Gemini quota'):
+        gemini.ask({'uri': 'https://youtu.be/abc'}, None, model='m', key=KEY, sleep=lambda s: pytest.fail('slept'))
+
+
+def test_agentic_extended_metadata_rejection_falls_back_to_static_once(calls):
+    rejected = b'{"error":{"message":"extended_metadata must be a supported extension of beyond.files.ExtendedFileMetadata"}}'
+    calls.replies = [http_error(400, rejected), FakeResponse(answer('static answer'))]
+    result = gemini.ask({'uri': 'https://youtu.be/abc'}, None, model='m', key=KEY)
+    modes = [json.loads(c.data)['input'][0]['processing'] for c in calls]
+    assert modes == ['agentic', {'type': 'static'}]
+    assert result['processing'] == 'static (Gemini rejected agentic processing)' and result['text'] == 'static answer'
+
+
+def test_other_400s_and_static_rejections_still_fail(calls):
+    rejected = b'{"error":{"message":"extended_metadata must be a supported extension"}}'
+    calls.replies = [http_error(400, rejected)]
+    with pytest.raises(SystemExit, match='Gemini rejected'):
+        gemini.ask({'uri': 'https://youtu.be/abc'}, None, model='m', key=KEY, clip=(0, None))
+    calls.replies = [http_error(400, b'{"error":{"message":"Invalid input"}}')]
+    with pytest.raises(SystemExit, match='Gemini rejected'):
         gemini.ask({'uri': 'https://youtu.be/abc'}, None, model='m', key=KEY)

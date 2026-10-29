@@ -185,7 +185,8 @@ def test_cpu_installer_recipe_keeps_torch_out_of_cuda_index(monkeypatch, system)
     monkeypatch.setattr(setup, 'run_text', lambda *a, **kw: subprocess.CompletedProcess([], 0, '[]', ''))
     assert setup.install_whisperx() == 0
     torch = next(cmd for cmd in commands if 'torch==2.8.0' in cmd)
-    assert 'torchaudio==2.8.0' in torch and 'https://download.pytorch.org/whl/cpu' in torch
+    # torchvision must come from the CPU index too, or PyPI's CUDA build breaks torch+cpu (#264).
+    assert 'torchaudio==2.8.0' in torch and 'torchvision==0.23.0' in torch and 'https://download.pytorch.org/whl/cpu' in torch
     assert any('whisperx==3.8.6' in cmd for cmd in commands)
 
 
